@@ -1,0 +1,273 @@
+﻿using DataAccessUtility.Security;
+using Oracle.DataAccess.Client;
+using System;
+using System.Collections.Generic;
+using System.Configuration;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Web.Configuration;
+
+
+namespace DataAccessUtility
+{
+    public class RepositoryBase
+    {
+        private ConnectionClientDetail clientDetail;
+
+        public RepositoryBase()
+        {
+
+        }
+
+        public RepositoryBase(string ConnectionName, ConnectionClientDetail ClientDetail = null)
+        {
+            try
+            {
+                CreateConstructor(ConnectionName);
+                if (ClientDetail != null)
+                {
+                    clientDetail = ClientDetail;
+                }
+                else
+                {
+                    clientDetail = new ConnectionClientDetail() { IPAddress = "10.101.5.116", UserId = "002830" };
+                }
+            }
+            catch (Exception ex)
+            {
+                throw ex;
+            }
+        }
+
+        public RepositoryBase(string ConnectionName, bool Pooling, ConnectionClientDetail ClientDetail = null)
+        {
+            try
+            {
+                CreateConstructor(ConnectionName, Pooling);
+                clientDetail = ClientDetail;
+            }
+            catch (Exception ex)
+            {
+                throw ex;
+            }
+        }
+
+        public RepositoryBase(OracleConnection _connection)
+        {
+            try
+            {
+                ConnectionString = _connection.ConnectionString;
+                connection = _connection;
+            }
+            catch (Exception ex)
+            {
+                throw ex;
+            }
+        }
+
+        private void CreateConstructor(string ConnectionName)
+        {
+            CreateConstructor(ConnectionName, null);
+        }
+
+        private void CreateConstructor(string ConnectionName, bool? Pooling)
+        {
+            if (ConnectionName != null)
+            {
+                string WebconfigConnectionString = null;
+                #region "Get [WebConfig ConnectionString]"
+                if (WebConfigurationManager.ConnectionStrings != null)
+                {
+                    if (WebConfigurationManager.ConnectionStrings[ConnectionName] != null)
+                    {
+                        WebconfigConnectionString = WebConfigurationManager.ConnectionStrings[ConnectionName].ConnectionString;
+                    }
+                    else if (ConfigurationManager.ConnectionStrings[ConnectionName] != null)
+                    {
+                        WebconfigConnectionString = ConfigurationManager.ConnectionStrings[ConnectionName].ConnectionString;
+                    }
+                    else
+                    {
+                        throw new Exception("ConnectionString Not Found!");
+                    }
+                }
+                else
+                {
+                    throw new Exception("WebConfig Tag ConnectionStrings Not Found!");
+                }
+                #endregion "Get [WebConfig ConnectionString]"
+                if (CheckNotNull(WebconfigConnectionString))
+                {
+                    #region "Decrypt [ConnectionString]"
+                    if (WebconfigConnectionString.Contains("DATA SOURCE"))
+                    {
+                        ConnectionString = WebconfigConnectionString;
+                    }
+                    else
+                    {
+                        ConnectionString = SecurityHelper.Decrypt(WebconfigConnectionString);
+                    }
+                    #endregion "Decrypt [ConnectionString]"
+                    #region "Setting [Pooling]"
+                    if (Pooling != null)
+                    {
+                        if (Pooling.Value)
+                        {
+                            if (ConnectionString.Contains("pooling=false;"))
+                            {
+                                ConnectionString = ConnectionString.Replace("pooling=false;", "pooling=true;");
+                            }
+                            else
+                            {
+                                ConnectionString += "pooling=true;";
+                            }
+                        }
+                        else
+                        {
+                            if (!ConnectionString.Contains("pooling=false;"))
+                            {
+                                ConnectionString += "pooling=false;";
+                            }
+                        }
+                    }
+                    #endregion "Setting [Pooling]"
+                    connection = new OracleConnection(ConnectionString);
+                }
+                else
+                {
+                    throw new Exception("ConnectionString Not Found!");
+                }
+            }
+            else
+            {
+                throw new Exception("ConnectionName Not Found!");
+            }
+        }
+
+        #region "[Connection]"
+
+        private string _ConnectionString;
+
+        public string ConnectionString
+        {
+            get { return _ConnectionString; }
+            set
+            {
+                _ConnectionString = value;
+                connection = new OracleConnection(value);
+            }
+        }
+
+
+        protected OracleConnection connection;
+
+        public OracleConnection Connection
+        {
+            get { return connection; }
+            set { connection = value; }
+        }
+
+        public void OpenConnection()
+        {
+            connection.Open();
+            if (clientDetail != null)
+            {
+                connection.ClientId = "Employee :" + clientDetail.UserId + " IPAddess :" + clientDetail.IPAddress;
+            }
+        }
+
+        public void CloseConnection()
+        {
+            connection.Close();
+            connection.Dispose();
+        }
+
+        #endregion "[Connection]"
+
+        #region "[Transaction]"
+        protected OracleTransaction transaction;
+        public void beginTransaction()
+        {
+            transaction = connection.BeginTransaction();
+        }
+
+        public void commitTransaction()
+        {
+            transaction.Commit();
+            transaction.Dispose();
+        }
+
+        public void rollbackTransaction()
+        {
+            transaction.Rollback();
+            transaction.Dispose();
+        }
+
+        #endregion "[Transaction]"
+
+        #region "[SysDate]"
+
+        private DateTime _SysDate;
+
+        public DateTime SysDate
+        {
+            get
+            {
+                if (_SysDate == default(DateTime))
+                {
+                    GetDbSysDate();
+                    return _SysDate;
+                }
+                else
+                {
+                    return _SysDate;
+                }
+            }
+            set { _SysDate = value; }
+        }
+
+        public void GetDbSysDate()
+        {
+
+            string sqlStr =
+                "select sysdate from dual";
+            OracleCommand oCmd = new OracleCommand(sqlStr, connection);
+            SysDate = Convert.ToDateTime(oCmd.ExecuteScalar());
+        }
+
+        #endregion "[SysDate]"
+
+        private bool CheckNotNull(string Input)
+        {
+            if (Input != null)
+            {
+                Input = Input.Trim();
+                if (!string.IsNullOrEmpty(Input) && !string.IsNullOrWhiteSpace(Input))
+                {
+                    return true;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        public void PushTestText(string message)
+        {
+            string sqlStr = "insert into POLICY.free_text_tester(test_text) values(:message)";
+            using (OracleCommand oCmd = new OracleCommand(sqlStr, connection))
+            using (OracleParameter pMessage = new OracleParameter("message", OracleDbType.Varchar2, message, System.Data.ParameterDirection.Input))
+            {
+                oCmd.Parameters.Clear();
+                oCmd.Parameters.Add(pMessage);
+                oCmd.ExecuteNonQuery();
+            }
+        }
+    }
+}
